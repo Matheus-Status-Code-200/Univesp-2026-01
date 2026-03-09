@@ -1,0 +1,5 @@
+{
+  "name": "Mari Açaí - Painel da Cozinha",
+  "description": "Sistema de gerenciamento de pedidos para Mari Açaí com integração ESP32 para sinalização de pedidos prontos.",
+  "requestFramePermissions": []
+}
