@@ -4,8 +4,21 @@ import Database from "better-sqlite3";
 import path from "path";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const db = new Database("orders.db");
+
+// S3 Client Configuration (Supabase S3 API)
+const s3Client = process.env.S3_ACCESS_KEY_ID ? new S3Client({
+  endpoint: process.env.S3_ENDPOINT || "https://bievqeogyuvawkrmsrpe.storage.supabase.co/storage/v1/s3",
+  region: process.env.S3_REGION || "sa-east-1",
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
+  },
+  forcePathStyle: true,
+}) : null;
 
 // Initialize database
 db.exec(`
@@ -77,6 +90,58 @@ async function startServer() {
   app.post("/api/esp32/trigger", (req, res) => {
     broadcast({ type: "TRIGGER_LED", timestamp: Date.now() });
     res.json({ success: true, message: "LED Trigger broadcasted" });
+  });
+
+  // LED State for ESP32
+  let ledStatus = "off";
+
+  // ESP32 Polling Endpoint
+  // Returns "1" for ON and "0" for OFF
+  app.get("/api/esp32/led", (req, res) => {
+    res.send(ledStatus === "on" ? "1" : "0");
+  });
+
+  // Endpoint to update LED state from the frontend
+  app.post("/api/esp32/led", (req, res) => {
+    const { status } = req.body;
+    if (status === "on" || status === "off") {
+      ledStatus = status;
+      broadcast({ type: "LED_STATUS_CHANGED", status: ledStatus });
+      res.json({ success: true, status: ledStatus });
+    } else {
+      res.status(400).json({ error: "Invalid status" });
+    }
+  });
+
+  // S3 Pre-signed URL Endpoint
+  app.post("/api/storage/presigned-url", async (req, res) => {
+    if (!s3Client) {
+      return res.status(503).json({ error: "S3 Storage not configured on server" });
+    }
+
+    const { fileName, contentType } = req.body;
+    if (!fileName) return res.status(400).json({ error: "fileName required" });
+
+    try {
+      const bucket = process.env.S3_BUCKET_NAME || "imagens";
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: fileName,
+        ContentType: contentType || "image/jpeg",
+      });
+
+      const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+      
+      // Construct the likely public URL for Supabase
+      // Usually: https://project-id.supabase.co/storage/v1/object/public/bucket/file
+      const projectId = "bievqeogyuvawkrmsrpe";
+      const publicUrl = `https://${projectId}.supabase.co/storage/v1/object/public/${bucket}/${fileName}`;
+
+      res.json({ uploadUrl: url, publicUrl });
+    } catch (error) {
+      console.error("Error generating presigned URL:", error);
+      res.status(500).json({ error: "Failed to generate upload URL" });
+    }
   });
 
   // Vite middleware for development
